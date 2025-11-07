@@ -2,6 +2,10 @@
 
 自动从 GitHub 搜索并收集 V2Ray、Clash 等代理订阅链接的工具。
 
+> **注意:** 本工具会自动更新 [Subs-Check](https://github.com/xream/sub-check) 的 `config.yaml` 文件。首次使用时:
+> 1. 将 Subs-Check 的 `config.yaml` 文件拷贝到本工具目录下,或
+> 2. 使用本工具提供的 `config.yaml.example` 复制为 `config.yaml`
+
 ## ✨ 特性
 
 - 🔍 **智能搜索**: 根据关键字搜索 GitHub 仓库
@@ -19,21 +23,45 @@
 
 ## 🚀 快速开始
 
-### 安装依赖
+### 方式一: 使用启动脚本 (推荐)
+
+启动脚本会**自动完成所有配置**,包括依赖安装、配置文件创建、项目构建等。
+
+**Linux/macOS:**
+```bash
+chmod +x start.sh
+./start.sh once      # 立即执行一次
+```
+
+**Windows:**
+```cmd
+start.bat once       # 立即执行一次
+```
+
+详细说明: [启动脚本说明.md](启动脚本说明.md)
+
+### 方式二: 手动配置
+
+#### 1. 安装依赖
 
 ```bash
 npm install
 ```
 
-### 配置
+#### 2. 配置文件
 
-1. 复制配置文件:
+**复制 config.yaml 配置:**
+```bash
+cp config.yaml.example config.yaml
+```
+
+**复制环境变量配置:**
 
 ```bash
 cp .env.example .env
 ```
 
-2. 编辑 `.env` 文件:
+**编辑 `.env` 文件:**
 
 ```env
 # GitHub Token (可选但推荐)
@@ -51,7 +79,7 @@ OUTPUT_FILE=./output/subscriptions.md
 # 最大搜索仓库数
 MAX_REPOSITORIES=30
 
-# config.yaml 文件路径 (自动更新订阅链接)
+# config.yaml 文件路径 (自动更新subs-check配置文件的sub-urls)
 CONFIG_YAML_PATH=./config.yaml
 
 # 质量过滤 (可选)
@@ -67,57 +95,13 @@ LOG_DIR=./logs               # 日志目录
 ENABLE_FILE_LOG=true         # 是否启用文件日志
 ```
 
-### 运行
-
-#### 🎯 推荐方式: 使用启动脚本
-
-**Linux/macOS:**
-```bash
-# 立即执行一次
-./start.sh once
-
-# 启动定时任务
-./start.sh schedule
-
-# 启动定时任务并立即执行一次
-./start.sh now
-```
-
-**Windows:**
-```cmd
-REM 立即执行一次
-start.bat once
-
-REM 启动定时任务
-start.bat schedule
-
-REM 启动定时任务并立即执行一次
-start.bat now
-```
-
-**启动脚本会自动:**
-- ✅ 检查 Node.js 环境
-- ✅ 安装依赖 (如需要)
-- ✅ 创建配置文件 (如需要)
-- ✅ 构建项目
-- ✅ 创建必要目录
-
-详细说明: [启动脚本说明.md](启动脚本说明.md)
-
-#### 📝 查看日志
+#### 3. 构建项目
 
 ```bash
-# 显示最新日志
-./view-logs.sh
-
-# 实时跟踪日志
-./view-logs.sh tail
-
-# 列出所有日志
-./view-logs.sh list
+npm run build
 ```
 
-#### 手动运行 (备选)
+#### 4. 运行
 
 ```bash
 # 立即执行一次
@@ -128,9 +112,19 @@ npm start
 
 # 启动定时任务并立即执行一次
 npm start -- --run-now
+```
 
-# 开发模式
-npm run dev once
+### 📝 查看日志
+
+```bash
+# 显示最新日志
+./view-logs.sh
+
+# 实时跟踪日志
+./view-logs.sh tail
+
+# 列出所有日志
+./view-logs.sh list
 ```
 
 ## 📖 使用说明
