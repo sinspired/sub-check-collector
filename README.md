@@ -3,6 +3,7 @@
 自动从 GitHub 搜索并收集 V2Ray、Clash 等代理订阅链接的工具。
 
 > **注意:** 本工具会自动更新 [Subs-Check](https://github.com/xream/sub-check) 的 `config.yaml` 文件。首次使用时:
+>
 > 1. 将 Subs-Check 的 `config.yaml` 文件拷贝到本工具目录下,或
 > 2. 使用本工具提供的 `config.yaml.example` 复制为 `config.yaml`
 
@@ -28,12 +29,14 @@
 启动脚本会**自动完成所有配置**,包括依赖安装、配置文件创建、项目构建等。
 
 **Linux/macOS:**
+
 ```bash
 chmod +x start.sh
 ./start.sh once      # 立即执行一次
 ```
 
 **Windows:**
+
 ```cmd
 start.bat once       # 立即执行一次
 ```
@@ -51,6 +54,7 @@ npm install
 #### 2. 配置文件
 
 **复制 config.yaml 配置:**
+
 ```bash
 cp config.yaml.example config.yaml
 ```
@@ -137,6 +141,7 @@ npm start -- --run-now
 4. 生成并复制 Token
 
 **为什么需要 Token?**
+
 - 提高 API 速率限制 (未认证: 60次/小时 → 认证: 5000次/小时)
 - 避免搜索被限制
 
@@ -299,6 +304,7 @@ private readonly URL_PATTERNS = [
 **问题**: `API rate limit exceeded`
 
 **解决**:
+
 1. 配置 `GITHUB_TOKEN`
 2. 减少 `MAX_REPOSITORIES`
 3. 增加 `collector.ts` 中的延迟时间
@@ -306,10 +312,12 @@ private readonly URL_PATTERNS = [
 ### 搜索结果为空
 
 **原因**:
+
 - 关键字太具体
 - 仓库更新时间较久
 
 **解决**:
+
 - 调整搜索关键字
 - 修改搜索排序规则
 
@@ -368,23 +376,29 @@ LINK_VALIDATION_TIMEOUT=10000
 ### 使用建议
 
 **首次运行** (不建议验证):
+
 ```env
 VALIDATE_LINKS=false
 ```
+
 收集尽可能多的链接,不进行验证。
 
 **日常使用** (推荐验证):
+
 ```env
 VALIDATE_LINKS=true
 LINK_VALIDATION_TIMEOUT=10000
 ```
+
 确保只保留有效链接。
 
 **快速验证**:
+
 ```env
 VALIDATE_LINKS=true
 LINK_VALIDATION_TIMEOUT=5000
 ```
+
 快速过滤无响应的链接。
 
 ## 📝 TODO
