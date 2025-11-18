@@ -40,23 +40,59 @@ export class GitHubSearcher {
         console.log(`   最大更新天数: ${maxDaysSinceUpdate} 天`);
       }
 
-      // 先按更新时间搜索,获取更多结果用于后续排序
-      const response = await this.octokit.rest.search.repos({
-        q: query,
-        sort: 'updated',
-        order: 'desc',
-        per_page: Math.min(maxResults * 3, 100), // 获取3倍数量用于过滤和排序
-      });
+      // 分页抓取: 若 maxResults 超过一页(100)，继续请求下一页
+      // 为了后续过滤和排序，尽量抓取 3 倍候选，但最多 1000（GitHub 搜索硬上限）
+      const targetPool = Math.min(Math.max(maxResults, 1) * 3, 1000);
+      const perPage = Math.min(100, targetPool); // 每页最多100
+      let page = 1;
+      let fetchedTotal = 0;
+      let repositories: Repository[] = [];
 
-      let repositories: Repository[] = response.data.items.map((item) => ({
-        fullName: item.full_name,
-        url: item.html_url,
-        description: item.description || undefined,
-        stars: item.stargazers_count,
-        updatedAt: new Date(item.updated_at),
-      }));
+      while (repositories.length < targetPool) {
+        const resp = await this.octokit.rest.search.repos({
+          q: query,
+          sort: 'updated',
+          order: 'desc',
+          per_page: perPage,
+          page,
+        });
 
-      console.log(`✅ 初步找到 ${repositories.length} 个仓库`);
+        const items = resp.data.items || [];
+        if (!items.length) {
+          break;
+        }
+
+        const mapped = items.map((item) => ({
+          fullName: item.full_name,
+          url: item.html_url,
+          description: item.description || undefined,
+          stars: item.stargazers_count,
+          updatedAt: new Date(item.updated_at),
+        }));
+
+        repositories.push(...mapped);
+        fetchedTotal += items.length;
+        console.log(`   📄 第 ${page} 页获取 ${items.length} 条，共计 ${fetchedTotal} 条`);
+
+        // 如果本页不足 perPage，则已到最后一页
+        if (items.length < perPage) {
+          break;
+        }
+
+        // 防止超出 1000 的搜索限制
+        if (repositories.length >= 1000) {
+          break;
+        }
+
+        page += 1;
+      }
+
+      // 截断至期望候选池大小
+      if (repositories.length > targetPool) {
+        repositories = repositories.slice(0, targetPool);
+      }
+
+      console.log(`✅ 初步找到 ${repositories.length} 个候选仓库（跨 ${page} 页）`);
 
       // 1. 过滤: 最低 star 数量
       if (minStars > 0) {
