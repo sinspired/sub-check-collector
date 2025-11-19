@@ -79,8 +79,8 @@ export class GitHubSearcher {
           break;
         }
 
-        // 防止超出 1000 的搜索限制
-        if (repositories.length >= 1000) {
+        // 防止超出 3000 的搜索限制
+        if (repositories.length >= 3000) {
           break;
         }
 

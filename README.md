@@ -2,9 +2,9 @@
 
 自动从 GitHub 搜索并收集 V2Ray、Clash 等代理订阅链接的工具。
 
-> **注意:** 本工具会自动更新 [Subs-Check](https://github.com/xream/sub-check) 的 `config.yaml` 文件。首次使用时:
+> **注意:** 本工具会自动更新 [Subs-Check](https://github.com/sinspired/subs-check) 的 `config.yaml` 文件。首次使用时:
 >
-> 1. 将 Subs-Check 的 `config.yaml` 文件拷贝到本工具目录下,或
+> 1. 将 Subs-Check 的 [config.yaml](https://github.com/sinspired/subs-check/blob/main/config/config.example.yaml) 文件拷贝到本工具目录下,或
 > 2. 使用本工具提供的 `config.yaml.example` 复制为 `config.yaml`
 
 ## ✨ 特性
