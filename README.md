@@ -6,8 +6,9 @@
 > 1. 将 Subs-Check 的 `config.yaml` 文件拷贝到本工具目录下,或
 > 2. 使用本工具提供的 `config.yaml.example` 复制为 `config.yaml`
 
+
 > [!Warning]
-> 请使用 node 22 或 node 26，node 24目前存在bug
+> 请使用 `node v22` 或 `node v26`，`node v24` 目前存在bug
 
 
 ## ✨ 特性
