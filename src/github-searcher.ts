@@ -1,27 +1,15 @@
 import { Octokit } from '@octokit/rest';
 import { Repository } from './types';
 
-/**
- * GitHub 搜索模块
- * 职责: 根据关键字搜索相关仓库
- */
 export class GitHubSearcher {
   private octokit: Octokit;
 
   constructor(token?: string) {
-    // 只有当 token 存在且不为空时才使用(避免无效 token 导致401)
     this.octokit = new Octokit(
       token && token.trim() ? { auth: token } : {}
     );
   }
 
-  /**
-   * 搜索包含指定关键字的仓库
-   * @param keywords 关键字数组
-   * @param maxResults 最大结果数
-   * @param minStars 最低 star 数量
-   * @param maxDaysSinceUpdate 最大更新天数
-   */
   async searchRepositories(
     keywords: string[],
     maxResults: number = 30,
@@ -29,99 +17,50 @@ export class GitHubSearcher {
     maxDaysSinceUpdate?: number
   ): Promise<Repository[]> {
     try {
-      // 构建搜索查询: 使用 AND 连接所有关键字
-      const query = keywords.join(' ');
+      const baseQuery = keywords.join(' ');
+      const targetPool = Math.min(maxResults * 3, 3000);
 
-      console.log(`🔍 搜索关键字: ${query}`);
+      console.log(`🔍 搜索关键字: ${baseQuery}`);
+      if (minStars > 0) console.log(`   最低 star: ${minStars}`);
+      if (maxDaysSinceUpdate) console.log(`   最大更新天数: ${maxDaysSinceUpdate} 天`);
+
+      const rawItems = await this.fetchByCursor(baseQuery, targetPool);
+
+      // 去重
+      const seen = new Set<string>();
+      const unique = rawItems.filter(item => {
+        if (seen.has(item.full_name)) return false;
+        seen.add(item.full_name);
+        return true;
+      });
+      console.log(`✅ 去重后候选: ${unique.length} 个 (原始 ${rawItems.length} 个)`);
+
+      let repositories: Repository[] = unique.map(item => ({
+        fullName: item.full_name,
+        url: item.html_url,
+        description: item.description || undefined,
+        stars: item.stargazers_count,
+        updatedAt: new Date(item.updated_at),
+      }));
+
       if (minStars > 0) {
-        console.log(`   最低 star: ${minStars}`);
+        const before = repositories.length;
+        repositories = repositories.filter(r => r.stars >= minStars);
+        console.log(`   ⭐ star 过滤: ${before} → ${repositories.length}`);
       }
+
       if (maxDaysSinceUpdate) {
-        console.log(`   最大更新天数: ${maxDaysSinceUpdate} 天`);
+        const before = repositories.length;
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - maxDaysSinceUpdate);
+        repositories = repositories.filter(r => r.updatedAt >= cutoff);
+        console.log(`   📅 时间过滤: ${before} → ${repositories.length}`);
       }
 
-      // 分页抓取: 若 maxResults 超过一页(100)，继续请求下一页
-      // 为了后续过滤和排序，尽量抓取 3 倍候选，但最多 1000（GitHub 搜索硬上限）
-      const targetPool = Math.min(Math.max(maxResults, 1) * 3, 1000);
-      const perPage = Math.min(100, targetPool); // 每页最多100
-      let page = 1;
-      let fetchedTotal = 0;
-      let repositories: Repository[] = [];
-
-      while (repositories.length < targetPool) {
-        const resp = await this.octokit.rest.search.repos({
-          q: query,
-          sort: 'updated',
-          order: 'desc',
-          per_page: perPage,
-          page,
-        });
-
-        const items = resp.data.items || [];
-        if (!items.length) {
-          break;
-        }
-
-        const mapped = items.map((item) => ({
-          fullName: item.full_name,
-          url: item.html_url,
-          description: item.description || undefined,
-          stars: item.stargazers_count,
-          updatedAt: new Date(item.updated_at),
-        }));
-
-        repositories.push(...mapped);
-        fetchedTotal += items.length;
-        console.log(`   📄 第 ${page} 页获取 ${items.length} 条，共计 ${fetchedTotal} 条`);
-
-        // 如果本页不足 perPage，则已到最后一页
-        if (items.length < perPage) {
-          break;
-        }
-
-        // 防止超出 3000 的搜索限制
-        if (repositories.length >= 3000) {
-          break;
-        }
-
-        page += 1;
-      }
-
-      // 截断至期望候选池大小
-      if (repositories.length > targetPool) {
-        repositories = repositories.slice(0, targetPool);
-      }
-
-      console.log(`✅ 初步找到 ${repositories.length} 个候选仓库（跨 ${page} 页）`);
-
-      // 1. 过滤: 最低 star 数量
-      if (minStars > 0) {
-        const beforeCount = repositories.length;
-        repositories = repositories.filter(repo => repo.stars >= minStars);
-        console.log(`   ⭐ 过滤 star < ${minStars}: ${beforeCount} → ${repositories.length}`);
-      }
-
-      // 2. 过滤: 最大更新天数
-      if (maxDaysSinceUpdate) {
-        const beforeCount = repositories.length;
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - maxDaysSinceUpdate);
-
-        repositories = repositories.filter(repo => repo.updatedAt >= cutoffDate);
-        const filteredCount = beforeCount - repositories.length;
-        if (filteredCount > 0) {
-          console.log(`   📅 过滤超过 ${maxDaysSinceUpdate} 天未更新: ${beforeCount} → ${repositories.length} (过滤了 ${filteredCount} 个)`);
-        }
-      }
-
-      // 3. 综合排序: star 权重 70%, 更新时间权重 30%
-      repositories = this.sortRepositories(repositories);
-
-      // 4. 限制结果数量
-      repositories = repositories.slice(0, maxResults);
-
-      console.log(`🎯 最终选择 ${repositories.length} 个仓库`);
+      repositories = this.sortRepositories(repositories).slice(0, maxResults);
+      console.log(`🎯 最终返回 ${repositories.length} 个仓库`);
       return repositories;
+
     } catch (error) {
       console.error('❌ GitHub 搜索失败:', error);
       throw error;
@@ -129,60 +68,112 @@ export class GitHubSearcher {
   }
 
   /**
-   * 综合排序: 考虑 star 数量和更新时间
-   * 算法: score = (star权重 * 归一化stars) + (时间权重 * 归一化时间)
+   * 日期游标分页
+   *
+   * 每轮:
+   *   1. 用 updated:<cursor 限定时间窗口（每轮是独立查询，有独立的 1000 条空间）
+   *   2. 在该时间窗内翻最多 10 页（100 条/页 = 1000 条上限）
+   *   3. 取本轮最旧结果的 updated_at 作为下一轮游标
+   *
+   * 关键点:
+   *   - updated: 而非 pushed:（与 sort=updated 对齐）
+   *   - < 而非 <=（GitHub 搜索只支持 < / >）
+   *   - 游标不推进时立即退出（防死循环）
    */
+  private async fetchByCursor(query: string, target: number): Promise<any[]> {
+    const perPage = 100;
+    const items: any[] = [];
+    // 第一轮无日期限制，后续轮次设置游标
+    let cursor: string | null = null;
+    let prevCursor = '';
+
+    for (let round = 1; items.length < target; round++) {
+      const q = cursor ? `${query} updated:<${cursor}` : query;
+
+      console.log(
+        `   📄 [游标] 第 ${round} 轮 ${cursor ? `updated:<${cursor}` : '无限制'}，已抓 ${items.length} 条`
+      );
+
+      // 在当前时间窗内做页码分页，最多 1000 条
+      const roundItems: any[] = [];
+      for (let page = 1; page <= 10; page++) {
+        const resp = await this.octokit.rest.search.repos({
+          q,
+          sort: 'updated',
+          order: 'desc',
+          per_page: perPage,
+          page,
+        });
+
+        const batch = resp.data.items;
+        if (!batch.length) break;
+
+        roundItems.push(...batch);
+        console.log(`      📃 第 ${page} 页 +${batch.length} 条`);
+
+        if (batch.length < perPage) break; // 已是最后一页
+        if (roundItems.length >= 1000) break; // 触顶，下一轮用游标继续
+      }
+
+      if (!roundItems.length) {
+        console.log(`   ✅ 无更多数据，停止抓取`);
+        break;
+      }
+
+      items.push(...roundItems);
+      console.log(`   ✅ 本轮 +${roundItems.length} 条，累计 ${items.length} 条`);
+
+      // 推进游标：取本轮最旧结果的日期（精确到天，exclusive）
+      const oldestDate = roundItems[roundItems.length - 1].updated_at as string;
+      // 只取日期部分，GitHub 搜索仅支持 YYYY-MM-DD
+      cursor = oldestDate.split('T')[0];
+
+      // 防死循环：游标未推进（同一天超过 1000 条时会发生）
+      if (cursor === prevCursor) {
+        console.log(`   ⚠️  游标卡在 ${cursor}（该日结果超 1000 条），停止抓取`);
+        break;
+      }
+      prevCursor = cursor;
+
+      // 本轮不足 1000 条，说明该时间窗已穷尽
+      if (roundItems.length < 1000) {
+        console.log(`   ✅ 本轮结果 < 1000，数据已穷尽`);
+        break;
+      }
+
+      // 避免触发速率限制
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    return items;
+  }
+
   private sortRepositories(repos: Repository[]): Repository[] {
     if (repos.length === 0) return repos;
 
-    // 找出最大和最小值用于归一化
     const maxStars = Math.max(...repos.map(r => r.stars));
     const minStars = Math.min(...repos.map(r => r.stars));
-    const now = Date.now();
     const timestamps = repos.map(r => r.updatedAt.getTime());
     const maxTime = Math.max(...timestamps);
     const minTime = Math.min(...timestamps);
 
-    // 计算每个仓库的综合得分
-    const scored = repos.map(repo => {
-      // 归一化 stars (0-1)
-      const normalizedStars = maxStars > minStars
-        ? (repo.stars - minStars) / (maxStars - minStars)
-        : 1;
-
-      // 归一化时间 (0-1, 越新分数越高)
-      const normalizedTime = maxTime > minTime
-        ? (repo.updatedAt.getTime() - minTime) / (maxTime - minTime)
-        : 1;
-
-      // 综合得分: star 70%, 时间 30%
-      const score = (normalizedStars * 0.7) + (normalizedTime * 0.3);
-
-      return { repo, score };
-    });
-
-    // 按得分降序排序
-    scored.sort((a, b) => b.score - a.score);
-
-    return scored.map(item => item.repo);
+    return repos
+      .map(repo => {
+        const nStars = maxStars > minStars
+          ? (repo.stars - minStars) / (maxStars - minStars) : 1;
+        const nTime = maxTime > minTime
+          ? (repo.updatedAt.getTime() - minTime) / (maxTime - minTime) : 1;
+        return { repo, score: nStars * 0.7 + nTime * 0.3 };
+      })
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.repo);
   }
 
-  /**
-   * 获取仓库的 README 内容
-   * @param fullName 仓库完整名称 (owner/repo)
-   */
   async getReadmeContent(fullName: string): Promise<string | null> {
     try {
       const [owner, repo] = fullName.split('/');
-
-      const response = await this.octokit.rest.repos.getReadme({
-        owner,
-        repo,
-      });
-
-      // README 内容是 base64 编码的
-      const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
-      return content;
+      const response = await this.octokit.rest.repos.getReadme({ owner, repo });
+      return Buffer.from(response.data.content, 'base64').toString('utf-8');
     } catch (error: any) {
       if (error.status === 404) {
         console.warn(`⚠️  仓库 ${fullName} 没有 README`);
