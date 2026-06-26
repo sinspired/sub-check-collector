@@ -36,7 +36,8 @@ export class ConfigUpdater {
       const newUrls = this.extractValidUrls(links);
 
       // 4. 获取现有的 sub-urls 并清理非法 URL
-      const existingUrls = new Set<string>(config['sub-urls'] || []);
+      const rawExisting = config['sub-urls'] || [];
+      const existingUrls = new Set<string>(rawExisting.map((url: string) => this.normalizeUrl(url)));
       const beforeCount = existingUrls.size;
       for (const url of existingUrls) {
         if (this.isNonSubscriptionUrl(url)) {
@@ -87,11 +88,33 @@ export class ConfigUpdater {
         url.includes('/sub') ||
         url.includes('subscription')
       ) {
-        urls.add(url);
+        // 规范化后添加，确保去重
+        urls.add(this.normalizeUrl(url));
       }
     }
 
     return urls;
+  }
+
+  /**
+   * 规范化 URL，用于去重
+   */
+  private normalizeUrl(url: string): string {
+    let normalized = url
+      .toLowerCase()
+      .replace(/[|`'"'\)>]+$/, '')
+      .replace(/\/+$/, '')
+      .replace(/^http:/, 'https:');
+
+    // 去除 query 和 fragment
+    try {
+      const u = new URL(normalized);
+      normalized = u.origin + u.pathname;
+    } catch {
+      normalized = normalized.replace(/[?#].*$/, '');
+    }
+
+    return normalized;
   }
 
   /**
