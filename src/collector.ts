@@ -6,10 +6,6 @@ import { LinkValidator } from './link-validator';
 import { Logger } from './logger';
 import { Config } from './types';
 
-/**
- * 订阅链接收集器
- * 职责: 协调各模块完成完整的收集流程
- */
 export class SubscriptionCollector {
   private searcher: GitHubSearcher;
   private parser: ReadmeParser;
@@ -27,42 +23,36 @@ export class SubscriptionCollector {
     this.aggregator = new LinkAggregator();
     this.configUpdater = new ConfigUpdater(config.configYamlPath);
 
-    // 如果启用链接验证,创建验证器
     if (config.validateLinks) {
       this.validator = new LinkValidator(
         config.linkValidationTimeout,
-        config.linkValidationConcurrency
+        config.linkValidationConcurrency,
+        config.proxyUrl,
+        config.maxDaysSinceSubUpdate,
+        config.githubToken
       );
     }
   }
 
-  /**
-   * 执行一次完整的收集流程
-   */
   async collect(): Promise<void> {
     console.log('\n🚀 开始收集订阅链接...\n');
     const startTime = Date.now();
 
     await this.logger.sessionStart('订阅链接收集');
     await this.logger.info('收集流程启动', {
-      searchKeywords: this.config.searchKeywords,
       maxRepositories: this.config.maxRepositories,
-      minStars: this.config.minStars,
-      maxDaysSinceUpdate: this.config.maxDaysSinceUpdate,
       validateLinks: this.config.validateLinks,
     });
 
     try {
-      // 1. 加载历史数据(增量更新)
-      await this.logger.info('加载历史数据', { file: this.config.outputFile });
-      await this.aggregator.loadFromFile(this.config.outputFile);
+      console.log('📂 从头开始收集，不加载历史链接\n');
 
-      // 2. 搜索 GitHub 仓库
-      await this.logger.info('开始搜索 GitHub 仓库');
-      const repositories = await this.searcher.searchRepositories(
-        this.config.searchKeywords,
+      await this.logger.info('开始多策略搜索 GitHub 仓库');
+      const keywordGroups = this.config.keywordGroups || [this.config.searchKeywords];
+      const repositories = await this.searcher.searchAll(
+        keywordGroups,
         this.config.maxRepositories,
-        this.config.minStars,
+        this.config.minStars ?? 0,
         this.config.maxDaysSinceUpdate
       );
 
@@ -71,26 +61,56 @@ export class SubscriptionCollector {
         repositories: repositories.map(r => r.fullName),
       });
 
-      console.log(`\n📦 准备处理 ${repositories.length} 个仓库\n`);
+      // 按更新时间排序（最新优先）
+      repositories.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 
-      // 3. 遍历每个仓库,提取链接
+      console.log(`\n📦 准备处理 ${repositories.length} 个仓库（按更新时间排序）\n`);
+      repositories.forEach((r, i) => {
+        const date = r.updatedAt.toLocaleString('zh-CN');
+        console.log(`   ${i + 1}. ${r.fullName} (更新: ${date})`);
+      });
+      console.log('');
+
       for (let i = 0; i < repositories.length; i++) {
         const repo = repositories[i];
         console.log(`\n[${i + 1}/${repositories.length}] 处理: ${repo.fullName}`);
 
         try {
-          // 获取 README
           const readme = await this.searcher.getReadmeContent(repo.fullName);
-
           if (readme) {
-            // 解析链接
             const links = this.parser.extractLinks(readme, repo.fullName);
-
-            // 添加到聚合器
             this.aggregator.addLinks(links);
           }
 
-          // 避免触发 GitHub API 限制
+          if (this.config.exploreFileTree) {
+            const subFiles = await this.searcher.getRepoFileTree(repo.fullName);
+            if (subFiles.length > 0) {
+              console.log(`   📂 发现 ${subFiles.length} 个订阅文件`);
+
+              let filteredFiles = subFiles;
+              if (this.config.maxDaysSinceUpdate) {
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - this.config.maxDaysSinceUpdate);
+                filteredFiles = subFiles.filter(f => f.lastCommit >= cutoffDate);
+                if (filteredFiles.length < subFiles.length) {
+                  console.log(`   📅 过滤旧文件: ${subFiles.length} → ${filteredFiles.length}`);
+                }
+              }
+
+              for (const file of filteredFiles.slice(0, 10)) {
+                const content = await this.searcher.getFileContent(repo.fullName, file.name);
+                if (content) {
+                  const links = this.parser.extractLinks(content, `${repo.fullName}/${file.name}`);
+                  if (links.length > 0) {
+                    console.log(`   📝 ${file.name}: ${links.length} 个链接`);
+                    this.aggregator.addLinks(links);
+                  }
+                }
+                await this.delay(500);
+              }
+            }
+          }
+
           await this.delay(1000);
         } catch (error) {
           console.error(`⚠️  处理 ${repo.fullName} 时出错:`, error);
@@ -98,27 +118,19 @@ export class SubscriptionCollector {
         }
       }
 
-      // 4. 保存结果到 Markdown 文件
       await this.aggregator.saveToFile(this.config.outputFile);
 
-      // 5. 如果启用了链接验证,验证所有链接
       let linksToUpdate = this.aggregator.getAllLinks();
-
       if (this.config.validateLinks && this.validator) {
         console.log('\n🔐 链接验证已启用\n');
         linksToUpdate = await this.validator.validateLinks(linksToUpdate);
       }
 
-      // 6. 更新 config.yaml (如果配置了路径)
       if (this.config.configYamlPath) {
-        // 备份配置文件
         await this.configUpdater.backupConfig();
-
-        // 更新 config.yaml (使用验证后的链接)
         await this.configUpdater.updateSubUrls(linksToUpdate);
       }
 
-      // 7. 输出统计
       const stats = this.aggregator.getStats();
       const elapsed = (Date.now() - startTime) / 1000;
 
@@ -146,16 +158,10 @@ export class SubscriptionCollector {
     }
   }
 
-  /**
-   * 延迟函数
-   */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /**
-   * 获取统计信息
-   */
   getStats() {
     return this.aggregator.getStats();
   }

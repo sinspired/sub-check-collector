@@ -2,32 +2,68 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { SubscriptionLink } from './types';
 
-/**
- * 链接聚合器
- * 职责: 去重、排序、持久化订阅链接
- */
 export class LinkAggregator {
   private links: Map<string, SubscriptionLink> = new Map();
 
+  private normalizeUrl(url: string): string {
+    let normalized = url
+      .toLowerCase()
+      .replace(/[|`'"'\)>]+$/, '')
+      .replace(/\/+$/, '')
+      .replace(/^http:/, 'https:');
+
+    // 去除 query 和 fragment
+    try {
+      const u = new URL(normalized);
+      normalized = u.origin + u.pathname;
+    } catch {
+      normalized = normalized.replace(/[?#].*$/, '');
+    }
+
+    return normalized;
+  }
+
   /**
-   * 添加链接(自动去重)
+   * 获取用于去重的基础 URL（去除扩展名等）
+   * 用于判断同一文件的不同格式/编码是否重复
    */
+  private getBaseUrl(url: string): string {
+    const normalized = this.normalizeUrl(url);
+    // 去除常见扩展名
+    return normalized
+      .replace(/\.(txt|yaml|yml|json|conf|v2ray|clash|ss|ssr|base64)$/i, '')
+      .replace(/\/raw\/refs\/heads\/main\//, '/main/')
+      .replace(/\/raw\/main\//, '/main/');
+  }
+
   addLinks(newLinks: SubscriptionLink[]): void {
     for (const link of newLinks) {
-      // 使用 URL 作为唯一标识进行去重
-      if (!this.links.has(link.url)) {
-        this.links.set(link.url, link);
-      } else {
-        // 如果链接已存在,更新发现时间
-        const existing = this.links.get(link.url)!;
+      const key = this.normalizeUrl(link.url);
+      const baseUrl = this.getBaseUrl(link.url);
+
+      // 检查完全相同的 URL
+      if (this.links.has(key)) {
+        const existing = this.links.get(key)!;
         existing.foundAt = link.foundAt;
+        continue;
+      }
+
+      // 检查同一基础 URL 的不同格式（如 all.yaml 和 v2ray.txt）
+      let isDuplicate = false;
+      for (const [existingKey, existingLink] of this.links) {
+        if (this.getBaseUrl(existingLink.url) === baseUrl) {
+          // 同一基础 URL，保留先出现的
+          isDuplicate = true;
+          break;
+        }
+      }
+
+      if (!isDuplicate) {
+        this.links.set(key, link);
       }
     }
   }
 
-  /**
-   * 获取所有链接(按类型分组)
-   */
   getGroupedLinks(): Record<string, SubscriptionLink[]> {
     const grouped: Record<string, SubscriptionLink[]> = {};
 
@@ -39,7 +75,6 @@ export class LinkAggregator {
       grouped[type].push(link);
     }
 
-    // 每个组内按发现时间倒序
     for (const type in grouped) {
       grouped[type].sort((a, b) => b.foundAt.getTime() - a.foundAt.getTime());
     }
@@ -47,9 +82,6 @@ export class LinkAggregator {
     return grouped;
   }
 
-  /**
-   * 获取统计信息
-   */
   getStats(): { total: number; byType: Record<string, number> } {
     const byType: Record<string, number> = {};
 
@@ -64,21 +96,14 @@ export class LinkAggregator {
     };
   }
 
-  /**
-   * 获取所有链接
-   */
   getAllLinks(): SubscriptionLink[] {
     return Array.from(this.links.values());
   }
 
-  /**
-   * 保存到文件
-   */
   async saveToFile(filePath: string): Promise<void> {
     const grouped = this.getGroupedLinks();
     const stats = this.getStats();
 
-    // 生成 Markdown 格式输出
     let content = '# V2Ray/Clash 订阅链接汇总\n\n';
     content += `> 最后更新: ${new Date().toLocaleString('zh-CN')}\n`;
     content += `> 总计: ${stats.total} 个链接\n\n`;
@@ -89,7 +114,6 @@ export class LinkAggregator {
     }
     content += '\n---\n\n';
 
-    // 按类型输出
     for (const [type, links] of Object.entries(grouped)) {
       content += `## ${type}\n\n`;
 
@@ -104,46 +128,61 @@ export class LinkAggregator {
       }
     }
 
-    // 附录: 纯链接列表(方便复制)
+    // 附录: 排序后的纯链接列表
+    const sortedUrls = Array.from(this.links.values())
+      .map(l => l.url)
+      .sort();
     content += '## 📎 纯链接列表\n\n';
     content += '```\n';
-    for (const link of this.links.values()) {
-      content += link.url + '\n';
+    for (const url of sortedUrls) {
+      content += url + '\n';
     }
     content += '```\n';
 
-    // 确保目录存在
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
 
-    // 写入文件
-    await fs.writeFile(filePath, content, 'utf-8');
+      // 备份旧文件
+      try {
+        await fs.access(filePath);
+        const backupPath = `${filePath}.backup.${Date.now()}`;
+        await fs.copyFile(filePath, backupPath);
+        console.log(`💾 已备份到: ${backupPath}`);
+        await this.cleanupOldBackups(filePath);
+      } catch {
+        // 文件不存在，无需备份
+      }
+
+    // Atomic write: 先写临时文件再 rename
+    const tmpPath = `${filePath}.tmp`;
+    await fs.writeFile(tmpPath, content, 'utf-8');
+    await fs.rename(tmpPath, filePath);
     console.log(`💾 已保存到: ${filePath}`);
   }
 
-  /**
-   * 从文件加载(用于增量更新)
-   */
   async loadFromFile(filePath: string): Promise<void> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
 
-      // 简单解析: 提取所有 URL
-      const urlPattern = /https?:\/\/[^\s<>"]+/g;
+      // 排除 badge 图片、非订阅文件扩展名
+      const urlPattern = /https?:\/\/[^\s<>")]+\.(yaml|yml|txt|conf|json|v2ray|clash|ss|ssr|vmess|vless|trojan)(?:\?[^\s<>"]*)?/gi;
       const matches = content.matchAll(urlPattern);
 
+      let loaded = 0;
       for (const match of matches) {
-        const url = match[0];
-        if (!this.links.has(url)) {
-          this.links.set(url, {
+        const url = match[0].replace(/[`'"]+$/, '');
+        const key = this.normalizeUrl(url);
+        if (!this.links.has(key)) {
+          this.links.set(key, {
             url,
             source: '历史记录',
             foundAt: new Date(),
           });
+          loaded++;
         }
       }
 
-      console.log(`📂 从文件加载了 ${this.links.size} 个链接`);
+      console.log(`📂 从文件加载了 ${loaded} 个链接`);
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         console.log('📂 输出文件不存在,将创建新文件');
@@ -153,10 +192,31 @@ export class LinkAggregator {
     }
   }
 
-  /**
-   * 清空所有链接
-   */
   clear(): void {
     this.links.clear();
+  }
+
+  /**
+   * 清理旧的备份文件，只保留最近 3 个
+   */
+  private async cleanupOldBackups(filePath: string): Promise<void> {
+    try {
+      const dir = path.dirname(filePath);
+      const baseName = path.basename(filePath);
+      const files = await fs.readdir(dir);
+      const backups = files
+        .filter(f => f.startsWith(`${baseName}.backup.`))
+        .sort()
+        .reverse();
+
+      if (backups.length > 3) {
+        for (const old of backups.slice(3)) {
+          await fs.unlink(path.join(dir, old));
+          console.log(`🗑️  已清理旧备份: ${old}`);
+        }
+      }
+    } catch {
+      // 忽略清理错误
+    }
   }
 }
