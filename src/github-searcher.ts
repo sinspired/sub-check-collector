@@ -1,151 +1,459 @@
 import { Octokit } from '@octokit/rest';
 import { Repository } from './types';
 
+// 订阅协议前缀（用于 Code Search）
+const SUBSCRIPTION_PROTOCOLS = ['vmess://', 'vless://', 'trojan://', 'ss://', 'ssr://', 'hysteria://', 'tuic://'];
+
+// 已知的大型订阅聚合仓库（用于种子源）
+const KNOWN_AGGREGATOR_REPOS: string[] = [];
+
+// GitHub Topics 标签
+const SEARCH_TOPICS = ['v2ray', 'clash', 'free-proxy', 'subscription', 'vmess', 'vless', 'proxy', 'vpn'];
+
 export class GitHubSearcher {
   private octokit: Octokit;
 
   constructor(token?: string) {
     this.octokit = new Octokit(
-      token && token.trim() ? { auth: token } : {}
+      token && token.trim() ? { auth: token.trim() } : {}
     );
   }
 
-  async searchRepositories(
-    keywords: string[],
-    maxResults: number = 30,
-    minStars: number = 0,
-    maxDaysSinceUpdate?: number
-  ): Promise<Repository[]> {
-    try {
-      const baseQuery = keywords.join(' ');
-      const targetPool = Math.min(maxResults * 3, 3000);
+  private async checkRateLimit(resp: any): Promise<void> {
+    const remaining = parseInt(resp.headers?.['x-ratelimit-remaining'] ?? '999', 10);
+    if (remaining <= 2) {
+      const resetTime = parseInt(resp.headers?.['x-ratelimit-reset'] ?? '0', 10);
+      const waitMs = Math.max(resetTime * 1000 - Date.now() + 1000, 5000);
+      console.log(`⏳ GitHub API 速率限制即将耗尽,等待 ${(waitMs / 1000).toFixed(0)} 秒...`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  }
 
-      console.log(`🔍 搜索关键字: ${baseQuery}`);
-      if (minStars > 0) console.log(`   最低 star: ${minStars}`);
-      if (maxDaysSinceUpdate) console.log(`   最大更新天数: ${maxDaysSinceUpdate} 天`);
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
-      const rawItems = await this.fetchByCursor(baseQuery, targetPool);
+  private async searchReposByQuery(query: string, maxResults: number): Promise<Repository[]> {
+    const perPage = Math.min(100, maxResults);
+    let page = 1;
+    let repositories: Repository[] = [];
 
-      // 去重
-      const seen = new Set<string>();
-      const unique = rawItems.filter(item => {
-        if (seen.has(item.full_name)) return false;
-        seen.add(item.full_name);
-        return true;
+    while (repositories.length < maxResults) {
+      const resp = await this.octokit.rest.search.repos({
+        q: query,
+        sort: 'updated',
+        order: 'desc',
+        per_page: perPage,
+        page,
       });
-      console.log(`✅ 去重后候选: ${unique.length} 个 (原始 ${rawItems.length} 个)`);
 
-      let repositories: Repository[] = unique.map(item => ({
+      await this.checkRateLimit(resp);
+
+      const items = resp.data.items || [];
+      if (!items.length) break;
+
+      repositories.push(...items.map((item) => ({
         fullName: item.full_name,
         url: item.html_url,
         description: item.description || undefined,
         stars: item.stargazers_count,
         updatedAt: new Date(item.updated_at),
-      }));
+      })));
 
-      if (minStars > 0) {
-        const before = repositories.length;
-        repositories = repositories.filter(r => r.stars >= minStars);
-        console.log(`   ⭐ star 过滤: ${before} → ${repositories.length}`);
-      }
-
-      if (maxDaysSinceUpdate) {
-        const before = repositories.length;
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - maxDaysSinceUpdate);
-        repositories = repositories.filter(r => r.updatedAt >= cutoff);
-        console.log(`   📅 时间过滤: ${before} → ${repositories.length}`);
-      }
-
-      repositories = this.sortRepositories(repositories).slice(0, maxResults);
-      console.log(`🎯 最终返回 ${repositories.length} 个仓库`);
-      return repositories;
-
-    } catch (error) {
-      console.error('❌ GitHub 搜索失败:', error);
-      throw error;
+      if (items.length < perPage) break;
+      page += 1;
     }
+
+    return repositories.slice(0, maxResults);
+  }
+
+  // 策略1: 多关键词轮询搜索
+  async searchByKeywords(keywordGroups: string[][], perGroup: number): Promise<Repository[]> {
+    const allRepos: Repository[] = [];
+    const seen = new Set<string>();
+
+    for (const keywords of keywordGroups) {
+      const query = keywords.join(' ');
+      console.log(`🔍 [关键词] 搜索: ${query}`);
+
+      const repos = await this.searchReposByQuery(query, perGroup);
+      for (const repo of repos) {
+        if (!seen.has(repo.fullName)) {
+          seen.add(repo.fullName);
+          allRepos.push(repo);
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    console.log(`✅ [关键词] 共发现 ${allRepos.length} 个仓库`);
+    return allRepos;
+  }
+
+  // 策略2: GitHub Code Search（搜索文件内容中的订阅协议）
+  async searchByCodeSearch(maxResults: number): Promise<Repository[]> {
+    const allRepos: Repository[] = [];
+    const seen = new Set<string>();
+
+    for (const protocol of SUBSCRIPTION_PROTOCOLS) {
+      console.log(`🔍 [Code Search] 搜索: ${protocol}`);
+      try {
+        const resp = await this.octokit.rest.search.code({
+          q: `${protocol} filename:txt`,
+          per_page: 100,
+        });
+
+        await this.checkRateLimit(resp);
+
+        const items = resp.data.items || [];
+        for (const item of items) {
+          const repo = item.repository;
+          if (!repo) continue;
+          const fullName = repo.full_name;
+          if (!seen.has(fullName)) {
+            seen.add(fullName);
+            allRepos.push({
+              fullName,
+              url: repo.html_url,
+              description: repo.description || undefined,
+              stars: repo.stargazers_count ?? 0,
+              updatedAt: new Date(repo.updated_at ?? Date.now()),
+            });
+          }
+        }
+
+        console.log(`   📄 ${protocol}: 发现 ${items.length} 个文件, ${allRepos.length} 个新仓库`);
+      } catch (error: any) {
+        if (error.status === 403) {
+          console.log(`   ⏳ Code Search 速率限制,跳过 ${protocol}`);
+          await new Promise(resolve => setTimeout(resolve, 10000));
+        } else {
+          console.error(`   ❌ Code Search 失败: ${error.message}`);
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    console.log(`✅ [Code Search] 共发现 ${allRepos.length} 个仓库`);
+    return allRepos;
+  }
+
+  // 策略3: GitHub Topics 搜索
+  async searchByTopics(maxResults: number): Promise<Repository[]> {
+    const allRepos: Repository[] = [];
+    const seen = new Set<string>();
+
+    for (const topic of SEARCH_TOPICS) {
+      console.log(`🔍 [Topics] 搜索: topic:${topic}`);
+      try {
+        const repos = await this.searchReposByQuery(`topic:${topic}`, Math.ceil(maxResults / SEARCH_TOPICS.length));
+        for (const repo of repos) {
+          if (!seen.has(repo.fullName)) {
+            seen.add(repo.fullName);
+            allRepos.push(repo);
+          }
+        }
+      } catch (error: any) {
+        console.error(`   ❌ Topics 搜索失败: ${error.message}`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    console.log(`✅ [Topics] 共发现 ${allRepos.length} 个仓库`);
+    return allRepos;
+  }
+
+  // 策略4: 已知聚合仓库（种子源）
+  getAggregatorRepos(): Repository[] {
+    console.log(`📋 [种子源] 加载 ${KNOWN_AGGREGATOR_REPOS.length} 个已知聚合仓库`);
+    return KNOWN_AGGREGATOR_REPOS.map(fullName => ({
+      fullName,
+      url: `https://github.com/${fullName}`,
+      description: '已知订阅聚合仓库',
+      stars: 0,
+      updatedAt: new Date(),
+    }));
+  }
+
+  // 综合搜索：合并所有策略的结果
+  async searchAll(
+    keywordGroups: string[][],
+    maxRepositories: number,
+    minStars: number,
+    maxDaysSinceUpdate?: number
+  ): Promise<Repository[]> {
+    const seen = new Set<string>();
+    const allRepos: Repository[] = [];
+
+    const addUnique = (repos: Repository[]) => {
+      for (const repo of repos) {
+        if (!seen.has(repo.fullName)) {
+          seen.add(repo.fullName);
+          allRepos.push(repo);
+        }
+      }
+    };
+
+    const perGroup = Math.ceil(maxRepositories / keywordGroups.length);
+
+    // 验证 GitHub Token 有效性
+    let keywordRepos: Repository[] = [];
+    let tokenValid = true;
+    try {
+      const testResp = await this.octokit.rest.search.repos({
+        q: 'test',
+        per_page: 1,
+      });
+      if (testResp.status !== 200) tokenValid = false;
+    } catch {
+      tokenValid = false;
+    }
+
+    if (!tokenValid) {
+      console.log('\n⚠️  GitHub Token 无效或过期，跳过关键词搜索（仅使用 Code Search 和 Topics）');
+      console.log('   请检查 .env 中的 GITHUB_TOKEN 配置\n');
+    }
+
+    console.log('\n📡 启动多策略搜索...\n');
+
+    const [codeResult, topicResult] = await Promise.allSettled([
+      this.searchByCodeSearch(maxRepositories),
+      this.searchByTopics(maxRepositories),
+    ]);
+
+    if (tokenValid) {
+      try {
+        keywordRepos = await this.searchByKeywords(keywordGroups, perGroup);
+      } catch (e: any) {
+        console.error('关键词搜索失败:', e?.message || e);
+      }
+    }
+
+    const codeSearchRepos = codeResult.status === 'fulfilled' ? codeResult.value : [];
+    const topicsRepos = topicResult.status === 'fulfilled' ? topicResult.value : [];
+    const seedRepos = this.getAggregatorRepos();
+
+    addUnique(keywordRepos);
+    addUnique(codeSearchRepos);
+    addUnique(topicsRepos);
+    addUnique(seedRepos);
+
+    console.log(`\n📊 搜索汇总: 关键词 ${keywordRepos.length} + Code Search ${codeSearchRepos.length} + Topics ${topicsRepos.length} + 种子源 ${seedRepos.length} = ${allRepos.length} 个不重复仓库\n`);
+
+    // 过滤非订阅仓库
+    let filtered = allRepos.filter(repo => !this.isNonSubscriptionRepo(repo));
+
+    if (minStars > 0) {
+      filtered = filtered.filter(repo => repo.stars >= minStars);
+    }
+
+    // 先按 updated_at 排序（GitHub 搜索返回的时间）
+    filtered.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+    // 只验证候选池（5 倍缓冲），避免验证大量不会入选的仓库
+    const candidatePool = filtered.slice(0, Math.min(maxRepositories * 5, filtered.length));
+
+    // 用 GitHub API 验证实际最后提交时间
+    if (maxDaysSinceUpdate) {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - maxDaysSinceUpdate);
+      const before = candidatePool.length;
+
+      console.log(`   🔍 验证 ${candidatePool.length} 个候选仓库的实际提交时间（共 ${filtered.length} 个）...`);
+
+      const verifiedRepos: Repository[] = [];
+      for (const repo of candidatePool) {
+        const lastCommit = await this.getLastCommitDate(repo.fullName);
+        if (lastCommit) {
+          // API 成功，用实际提交时间判断
+          if (lastCommit >= cutoffDate) {
+            repo.updatedAt = lastCommit;
+            verifiedRepos.push(repo);
+          }
+        } else {
+          // API 失败，保留仓库（不误杀）
+          verifiedRepos.push(repo);
+        }
+        await this.delay(100);
+      }
+
+      filtered = verifiedRepos;
+      const filteredCount = before - filtered.length;
+      if (filteredCount > 0) {
+        console.log(`   📅 实际提交时间过滤: ${before} → ${filtered.length} (过滤了 ${filteredCount} 个)`);
+      }
+    }
+
+    // 按更新时间排序（最新优先）
+    filtered.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+    // 限制数量
+    filtered = filtered.slice(0, maxRepositories);
+
+    console.log(`🎯 最终选择 ${filtered.length} 个仓库`);
+    return filtered;
   }
 
   /**
-   * 日期游标分页
-   *
-   * 每轮:
-   *   1. 用 updated:<cursor 限定时间窗口（每轮是独立查询，有独立的 1000 条空间）
-   *   2. 在该时间窗内翻最多 10 页（100 条/页 = 1000 条上限）
-   *   3. 取本轮最旧结果的 updated_at 作为下一轮游标
-   *
-   * 关键点:
-   *   - updated: 而非 pushed:（与 sort=updated 对齐）
-   *   - < 而非 <=（GitHub 搜索只支持 < / >）
-   *   - 游标不推进时立即退出（防死循环）
+   * 判断是否为非订阅仓库
    */
-  private async fetchByCursor(query: string, target: number): Promise<any[]> {
-    const perPage = 100;
-    const items: any[] = [];
-    // 第一轮无日期限制，后续轮次设置游标
-    let cursor: string | null = null;
-    let prevCursor = '';
+  private isNonSubscriptionRepo(repo: Repository): boolean {
+    const text = `${repo.fullName} ${repo.description || ''}`.toLowerCase();
+    const excludePatterns = [
+      // 广告过滤/hosts
+      /adblock/i,
+      /easylist/i,
+      /easyprivacy/i,
+      /adguard/i,
+      /anti-ad/i,
+      /hosts$/i,
+      /malware/i,
+      /annoyance/i,
+      /ublock/i,
+      // GKD/自动化规则
+      /gkd/i,
+      /sub-converter/i,
+      /subconverter/i,
+      // 订阅转换工具
+      /clash.*converter/i,
+      /v2ray.*converter/i,
+      // 代理工具（不是节点）
+      /proxy.*checker/i,
+      /proxy.*scanner/i,
+      /proxy.*test/i,
+      // 非代理/VPN 相关
+      /adblock.*list/i,
+      /filter.*list/i,
+      /block.*list/i,
+      // 编程语言/框架项目
+      /\bphp\b/i,
+      /\bpython\b/i,
+      /\bnode\b.*module/i,
+      /\bjava\b.*spring/i,
+      /\bruby\b/i,
+      /\bgolang\b/i,
+      /solidity/i,
+      /ethereum/i,
+      /evm\b/i,
+      /smart.?contract/i,
+      // 商业/支付项目
+      /stripe/i,
+      /payment/i,
+      /ecommerce/i,
+      /shopify/i,
+      // 个人配置/dotfiles
+      /dotfiles/i,
+      /dots$/i,
+      /myconfig/i,
+      // 教程/文档
+      /tutorial/i,
+      /course/i,
+      /learning/i,
+      // VPN 客户端源码（不是节点）
+      /vpn.?client/i,
+      /wireguard.?client/i,
+    ];
+    return excludePatterns.some(p => p.test(text));
+  }
 
-    for (let round = 1; items.length < target; round++) {
-      const q = cursor ? `${query} updated:<${cursor}` : query;
+  /**
+   * 获取仓库的最后提交时间
+   */
+  private async getLastCommitDate(fullName: string): Promise<Date | null> {
+    try {
+      const [owner, repo] = fullName.split('/');
+      const commits = await this.octokit.rest.repos.listCommits({
+        owner,
+        repo,
+        per_page: 1,
+      });
 
-      console.log(
-        `   📄 [游标] 第 ${round} 轮 ${cursor ? `updated:<${cursor}` : '无限制'}，已抓 ${items.length} 条`
-      );
-
-      // 在当前时间窗内做页码分页，最多 1000 条
-      const roundItems: any[] = [];
-      for (let page = 1; page <= 10; page++) {
-        const resp = await this.octokit.rest.search.repos({
-          q,
-          sort: 'updated',
-          order: 'desc',
-          per_page: perPage,
-          page,
-        });
-
-        const batch = resp.data.items;
-        if (!batch.length) break;
-
-        roundItems.push(...batch);
-        console.log(`      📃 第 ${page} 页 +${batch.length} 条`);
-
-        if (batch.length < perPage) break; // 已是最后一页
-        if (roundItems.length >= 1000) break; // 触顶，下一轮用游标继续
+      if (commits.data.length > 0 && commits.data[0].commit.committer?.date) {
+        return new Date(commits.data[0].commit.committer.date);
       }
-
-      if (!roundItems.length) {
-        console.log(`   ✅ 无更多数据，停止抓取`);
-        break;
-      }
-
-      items.push(...roundItems);
-      console.log(`   ✅ 本轮 +${roundItems.length} 条，累计 ${items.length} 条`);
-
-      // 推进游标：取本轮最旧结果的日期（精确到天，exclusive）
-      const oldestDate = roundItems[roundItems.length - 1].updated_at as string;
-      // 只取日期部分，GitHub 搜索仅支持 YYYY-MM-DD
-      cursor = oldestDate.split('T')[0];
-
-      // 防死循环：游标未推进（同一天超过 1000 条时会发生）
-      if (cursor === prevCursor) {
-        console.log(`   ⚠️  游标卡在 ${cursor}（该日结果超 1000 条），停止抓取`);
-        break;
-      }
-      prevCursor = cursor;
-
-      // 本轮不足 1000 条，说明该时间窗已穷尽
-      if (roundItems.length < 1000) {
-        console.log(`   ✅ 本轮结果 < 1000，数据已穷尽`);
-        break;
-      }
-
-      // 避免触发速率限制
-      await new Promise(r => setTimeout(r, 2000));
+      return null;
+    } catch {
+      return null;
     }
+  }
 
-    return items;
+  // 获取仓库的文件树（递归发现订阅文件）
+  async getRepoFileTree(fullName: string): Promise<{ name: string; lastCommit: Date }[]> {
+    try {
+      const [owner, repo] = fullName.split('/');
+      const response = await this.octokit.rest.repos.getContent({
+        owner,
+        repo,
+        path: '',
+      });
+
+      if (!Array.isArray(response.data)) return [];
+
+      const subFiles: { name: string; lastCommit: Date }[] = [];
+      const extensions = ['.txt', '.yaml', '.yml', '.json', '.conf', '.v2ray', '.clash'];
+
+      for (const item of response.data) {
+        if (item.type === 'file' && extensions.some(ext => item.name.endsWith(ext))) {
+          // 获取文件的最后提交时间
+          let lastCommit = new Date();
+          try {
+            const commits = await this.octokit.rest.repos.listCommits({
+              owner,
+              repo,
+              path: item.name,
+              per_page: 1,
+            });
+            if (commits.data.length > 0 && commits.data[0].commit.committer?.date) {
+              lastCommit = new Date(commits.data[0].commit.committer.date);
+            }
+          } catch {
+            // 获取提交信息失败，使用当前时间
+          }
+
+          subFiles.push({ name: item.name, lastCommit });
+          await this.delay(100);
+        }
+      }
+
+      return subFiles;
+    } catch {
+      return [];
+    }
+  }
+
+  // 获取仓库中指定文件的内容
+  async getFileContent(fullName: string, filePath: string): Promise<string | null> {
+    try {
+      const [owner, repo] = fullName.split('/');
+      const response = await this.octokit.rest.repos.getContent({
+        owner,
+        repo,
+        path: filePath,
+      });
+
+      if (Array.isArray(response.data) || response.data.type !== 'file') return null;
+
+      const content = Buffer.from(response.data.content, 'base64').toString('utf-8');
+      return content;
+    } catch {
+      return null;
+    }
+  }
+
+  async getReadmeContent(fullName: string): Promise<string | null> {
+    try {
+      const [owner, repo] = fullName.split('/');
+      const response = await this.octokit.rest.repos.getReadme({ owner, repo });
+      return Buffer.from(response.data.content, 'base64').toString('utf-8');
+    } catch (error: any) {
+      if (error.status === 404) {
+        console.warn(`⚠️  仓库 ${fullName} 没有 README`);
+      }
+      return null;
+    }
   }
 
   private sortRepositories(repos: Repository[]): Repository[] {
@@ -157,30 +465,16 @@ export class GitHubSearcher {
     const maxTime = Math.max(...timestamps);
     const minTime = Math.min(...timestamps);
 
-    return repos
-      .map(repo => {
-        const nStars = maxStars > minStars
-          ? (repo.stars - minStars) / (maxStars - minStars) : 1;
-        const nTime = maxTime > minTime
-          ? (repo.updatedAt.getTime() - minTime) / (maxTime - minTime) : 1;
-        return { repo, score: nStars * 0.7 + nTime * 0.3 };
-      })
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.repo);
-  }
+    const scored = repos.map(repo => {
+      const normalizedStars = maxStars > minStars
+        ? (repo.stars - minStars) / (maxStars - minStars) : 1;
+      const normalizedTime = maxTime > minTime
+        ? (repo.updatedAt.getTime() - minTime) / (maxTime - minTime) : 1;
+      const score = (normalizedStars * 0.7) + (normalizedTime * 0.3);
+      return { repo, score };
+    });
 
-  async getReadmeContent(fullName: string): Promise<string | null> {
-    try {
-      const [owner, repo] = fullName.split('/');
-      const response = await this.octokit.rest.repos.getReadme({ owner, repo });
-      return Buffer.from(response.data.content, 'base64').toString('utf-8');
-    } catch (error: any) {
-      if (error.status === 404) {
-        console.warn(`⚠️  仓库 ${fullName} 没有 README`);
-        return null;
-      }
-      console.error(`❌ 获取 ${fullName} README 失败:`, error.message);
-      return null;
-    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map(item => item.repo);
   }
 }
