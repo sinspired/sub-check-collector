@@ -4,6 +4,7 @@ import { SubscriptionLink } from './types';
 
 export class LinkAggregator {
   private links: Map<string, SubscriptionLink> = new Map();
+  private baseUrlMap: Map<string, string> = new Map();
 
   private normalizeUrl(url: string): string {
     let normalized = url
@@ -52,18 +53,13 @@ export class LinkAggregator {
       }
 
       // 检查同一基础 URL 的不同格式（如 all.yaml 和 v2ray.txt）
-      let isDuplicate = false;
-      for (const [existingKey, existingLink] of this.links) {
-        if (this.getBaseUrl(existingLink.url) === baseUrl) {
-          // 同一基础 URL，保留先出现的
-          isDuplicate = true;
-          break;
-        }
+      if (this.baseUrlMap.has(baseUrl)) {
+        continue;
       }
 
-      if (!isDuplicate) {
-        this.links.set(key, link);
-      }
+      // 添加新链接
+      this.links.set(key, link);
+      this.baseUrlMap.set(baseUrl, key);
     }
   }
 
@@ -197,6 +193,7 @@ export class LinkAggregator {
 
   clear(): void {
     this.links.clear();
+    this.baseUrlMap.clear();
   }
 
   /**

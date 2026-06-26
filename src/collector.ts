@@ -4,7 +4,7 @@ import { LinkAggregator } from './link-aggregator';
 import { ConfigUpdater } from './config-updater';
 import { LinkValidator } from './link-validator';
 import { Logger } from './logger';
-import { Config } from './types';
+import { Config, Repository } from './types';
 
 export class SubscriptionCollector {
   private searcher: GitHubSearcher;
@@ -71,9 +71,9 @@ export class SubscriptionCollector {
       });
       console.log('');
 
-      for (let i = 0; i < repositories.length; i++) {
-        const repo = repositories[i];
-        console.log(`\n[${i + 1}/${repositories.length}] 处理: ${repo.fullName}`);
+      const CONCURRENCY = 5;
+      const processRepo = async (repo: Repository, index: number) => {
+        console.log(`\n[${index + 1}/${repositories.length}] 处理: ${repo.fullName}`);
 
         try {
           const readme = await this.searcher.getReadmeContent(repo.fullName);
@@ -106,16 +106,18 @@ export class SubscriptionCollector {
                     this.aggregator.addLinks(links);
                   }
                 }
-                await this.delay(500);
               }
             }
           }
-
-          await this.delay(500);
         } catch (error) {
           console.error(`⚠️  处理 ${repo.fullName} 时出错:`, error);
-          continue;
         }
+      };
+
+      // 并发处理
+      for (let i = 0; i < repositories.length; i += CONCURRENCY) {
+        const batch = repositories.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map((repo, j) => processRepo(repo, i + j)));
       }
 
       await this.aggregator.saveToFile(this.config.outputFile);
