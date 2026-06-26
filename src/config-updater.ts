@@ -137,6 +137,9 @@ export class ConfigUpdater {
       normalized = normalized.replace(/[?#].*$/, '');
     }
 
+    // 统一 URL 编码大小写（%C3%BC → %c3%bc）
+    normalized = normalized.replace(/%[0-9A-F]{2}/gi, (match) => match.toLowerCase());
+
     return normalized;
   }
 
