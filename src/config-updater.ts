@@ -79,14 +79,16 @@ export class ConfigUpdater {
       // 排除非订阅 URL
       if (this.isNonSubscriptionUrl(url)) continue;
 
-      // 过滤规则: 只保留以下类型的链接
+      // 只保留订阅文件扩展名
+      const lower = url.toLowerCase();
+      const isSubscriptionFile = /\.(txt|yaml|yml|conf|json|v2ray|clash|ss|ssr|vmess|vless|trojan)$/i.test(lower);
+      const isSubscriptionPath = /\/sub($|\/)|\/subscription($|\/)/i.test(lower);
+
       if (
-        url.includes('raw.githubusercontent.com') ||
-        url.includes('gist.githubusercontent.com') ||
-        (url.includes('github.com') && !url.includes('actions')) ||
-        url.match(/\.(txt|yaml|yml|conf|json)$/i) ||
-        url.includes('/sub') ||
-        url.includes('subscription')
+        (url.includes('raw.githubusercontent.com') && isSubscriptionFile) ||
+        (url.includes('gist.githubusercontent.com') && isSubscriptionFile) ||
+        isSubscriptionFile ||
+        isSubscriptionPath
       ) {
         // 规范化后添加，确保去重
         urls.add(this.normalizeUrl(url));
@@ -123,19 +125,35 @@ export class ConfigUpdater {
   private isNonSubscriptionUrl(url: string): boolean {
     const lower = url.toLowerCase();
     return [
+      // 图片
+      /\.svg$/i,
+      /\.png$/i,
+      /\.jpg$/i,
+      /\.jpeg$/i,
+      /\.gif$/i,
+      /\.webp$/i,
+      // 压缩包
+      /\.zip$/i,
+      /\.tar\.gz$/i,
+      /\.tgz$/i,
+      /\.rar$/i,
+      /\.7z$/i,
+      // 可执行文件
+      /\.exe$/i,
+      /\.msi$/i,
+      /\.dmg$/i,
+      // 徽章/二维码
       /qrserver/i,
       /quickchart/i,
       /badge/i,
       /shields\.io/i,
       /img\.shields/i,
-      /translate\.yandex/i,
+      // GitHub actions
       /actions\/workflows/i,
+      // 其他
+      /translate\.yandex/i,
       /blacklist/i,
       /whitelist/i,
-      /\.svg$/i,
-      /\.png$/i,
-      /\.jpg$/i,
-      /\.gif$/i,
     ].some(p => p.test(lower));
   }
 
