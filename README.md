@@ -11,12 +11,13 @@
 - **双重时间过滤**:
   - 仓库级：用 GitHub API 检查实际最后提交时间（排除 star/fork 等非代码活动）
   - 文件级：对 raw.githubusercontent.com 链接用 GitHub API 检查文件最后提交时间
-- **非订阅仓库过滤**: 自动排除广告过滤列表、GKD 规则、代理工具等非订阅仓库
+- **非订阅仓库过滤**: 自动排除广告过滤列表、GKD 规则、代理工具、编程项目等非订阅仓库
 - **智能去重**: URL 规范化去重 + 同一基础 URL 不同格式去重（如 all.yaml 和 v2ray.txt）
+- **协议分类**: 自动识别 V2Ray、Clash、Shadowsocks、Hysteria、TUIC、WireGuard 等协议
 - **链接验证**: HTTP GET 校验内容有效性（支持 base64 编码检测）+ 过滤过期/无效链接
 - **代理支持**: 支持 HTTP/HTTPS 代理（通过 PROXY_URL 配置）
 - **文件树探索**: 可选遍历仓库根目录查找 .txt/.yaml/.json 等订阅文件
-- **每次从头收集**: 不保留历史订阅链接，每次运行重新搜索最新内容
+- **并发处理**: 仓库并发处理（5 并发），大幅提升收集速度
 - **自动更新 config.yaml**: 收集到的链接自动更新到 config.yaml 的 sub-urls
 - **备份自动清理**: backup 文件只保留最近 3 个，自动清理旧备份
 - **定时执行**: 支持 cron 定时任务
@@ -101,7 +102,7 @@ LINK_VALIDATION_CONCURRENCY=50
 | Code Search | 搜索文件内容中的 vmess://, vless:// 等 | 低（每个协议 1 次） |
 | Topics 搜索 | 按 v2ray, clash, free-proxy 等标签搜索 | 低（每个 topic 1 次） |
 
-所有策略并行执行，结果合并去重后统一过滤和排序。
+所有策略并行执行，结果合并去重后统一过滤和排序。全量收集后按更新时间排序，取最新的 N 个仓库。
 
 ## 链接验证
 
@@ -120,12 +121,12 @@ src/
   types.ts              # 类型定义
   config.ts             # 配置加载
   github-searcher.ts    # GitHub 搜索（多策略 + 实际提交时间验证）
-  readme-parser.ts      # URL 提取 + 非订阅 URL 过滤
-  link-aggregator.ts    # 去重、排序、持久化（自动清理旧备份）
+  readme-parser.ts      # URL 提取 + 非订阅 URL 过滤 + 协议分类
+  link-aggregator.ts    # 去重（O(n) baseUrlMap）、排序、持久化
   link-validator.ts     # 链接验证 + GitHub API 文件新鲜度检查
   config-updater.ts     # config.yaml 更新（自动清理旧备份）
   proxy-agent.ts        # 代理 agent 封装
-  collector.ts          # 主流程协调
+  collector.ts          # 主流程协调（5 并发处理）
   scheduler.ts          # 定时调度
   logger.ts             # 日志模块
   index.ts              # 入口
