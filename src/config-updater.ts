@@ -79,23 +79,44 @@ export class ConfigUpdater {
       // 排除非订阅 URL
       if (this.isNonSubscriptionUrl(url)) continue;
 
-      // 只保留订阅文件扩展名
-      const lower = url.toLowerCase();
-      const isSubscriptionFile = /\.(txt|yaml|yml|conf|json|v2ray|clash|ss|ssr|vmess|vless|trojan)$/i.test(lower);
-      const isSubscriptionPath = /\/sub($|\/)|\/subscription($|\/)/i.test(lower);
-
-      if (
-        (url.includes('raw.githubusercontent.com') && isSubscriptionFile) ||
-        (url.includes('gist.githubusercontent.com') && isSubscriptionFile) ||
-        isSubscriptionFile ||
-        isSubscriptionPath
-      ) {
-        // 规范化后添加，确保去重
+      if (this.isSubscriptionUrl(url, link.type)) {
         urls.add(this.normalizeUrl(url));
       }
     }
 
     return urls;
+  }
+
+  /**
+   * 判断是否为订阅 URL
+   */
+  private isSubscriptionUrl(url: string, type?: string): boolean {
+    const lower = url.toLowerCase();
+
+    // 1. 订阅文件扩展名
+    if (/\.(txt|yaml|yml|conf|json|v2ray|clash|ss|ssr|vmess|vless|trojan)$/i.test(lower)) {
+      return true;
+    }
+
+    // 2. 订阅相关路径关键字
+    if (/\/sub($|\/)|\/subscription($|\/)|\/subscribe($|\/)|\/nodes($|\/)/i.test(lower)) {
+      return true;
+    }
+
+    // 3. raw.githubusercontent.com 或 gist.githubusercontent.com 上的订阅仓库
+    if (lower.includes('raw.githubusercontent.com') || lower.includes('gist.githubusercontent.com')) {
+      // 排除明显的非订阅路径
+      if (!/\/(actions|workflows|releases|issues|pull)\//i.test(lower)) {
+        return true;
+      }
+    }
+
+    // 4. 已知订阅格式的 URL（通过链接类型推断）
+    if (type && ['V2Ray', 'Clash', 'Shadowsocks', 'Hysteria', 'TUIC', 'WireGuard'].includes(type)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
