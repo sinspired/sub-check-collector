@@ -73,8 +73,8 @@ export class TaskScheduler {
       const nextRun = tempJob.nextInvocation();
       tempJob.cancel();
       return nextRun ? new Date(nextRun).toLocaleString('zh-CN') : '未知';
-    } catch {
-      return '未知';
+    } catch (e: any) {
+      return `未知 (${e?.message || '解析失败'})`;
     }
   }
 }

@@ -17,9 +17,12 @@ export class ReadmeParser {
 
   // 订阅类型关键字映射
   private readonly TYPE_KEYWORDS: Record<string, string[]> = {
-    V2Ray: ['v2ray', 'vmess', 'vless', 'trojan'],
-    Clash: ['clash', 'clash.yaml', 'clash.yml'],
-    Shadowsocks: ['shadowsocks', 'ss', 'ssr'],
+    V2Ray: ['v2ray', 'vmess', 'vless', 'trojan', 'xray'],
+    Clash: ['clash', 'clash.yaml', 'clash.yml', 'mihomo'],
+    Shadowsocks: ['shadowsocks', 'shadowsocksr', 'ss', 'ssr'],
+    Hysteria: ['hysteria', 'hy2'],
+    TUIC: ['tuic'],
+    WireGuard: ['wireguard', 'wg'],
     订阅链接: ['订阅', 'subscription', 'sub'],
   };
 
@@ -85,6 +88,19 @@ export class ReadmeParser {
       }
     }
 
+    // 从 URL 路径中推断类型
+    const urlMatch = currentLine.match(/https?:\/\/[^\s]+/i);
+    if (urlMatch) {
+      const urlPath = urlMatch[0].toLowerCase();
+      if (/\/ss\//i.test(urlPath) || /shadowsocks/i.test(urlPath)) return 'Shadowsocks';
+      if (/\/clash/i.test(urlPath) || /mihomo/i.test(urlPath)) return 'Clash';
+      if (/\/v2ray|\/vmess|\/vless|\/trojan/i.test(urlPath)) return 'V2Ray';
+      if (/\/hysteria|\/hy2/i.test(urlPath)) return 'Hysteria';
+      if (/\/tuic/i.test(urlPath)) return 'TUIC';
+      if (/\/wireguard|\/wg/i.test(urlPath)) return 'WireGuard';
+      if (/\/ssr/i.test(urlPath)) return 'Shadowsocks';
+    }
+
     return undefined;
   }
 
@@ -147,7 +163,6 @@ export class ReadmeParser {
       /annoyance/i,
       // GKD/自动化规则
       /gkd/i,
-      /subscription\/(?!.*\.(txt|yaml|yml|json))/i,
       // 订阅转换/代理工具（不是节点）
       /sub-converter/i,
       /subconverter/i,
@@ -160,6 +175,16 @@ export class ReadmeParser {
       // 配置文件模板（不是实际订阅）
       /template/i,
       /example/i,
+      // 目录链接（以 / 结尾）
+      /\/$/,
+      // LICENSE/CHANGELOG 文件
+      /\/license(\/|$)/i,
+      /\/changelog(\/|$)/i,
+      /\/readme(\/|$)/i,
+      // 非订阅文件
+      /\.md$/i,
+      /\.html$/i,
+      /\.css$/i,
     ];
     return excludePatterns.some(p => p.test(lowerUrl));
   }

@@ -60,10 +60,14 @@ export class LinkValidator {
       let filePath: string;
 
       if (rest.startsWith('refs/')) {
-        // 格式: refs/heads/main/path/to/file.txt
-        const parts = rest.split('/');
-        branch = parts.slice(0, 3).join('/'); // refs/heads/main
-        filePath = parts.slice(3).join('/');
+        // 格式: refs/heads/feature/my-branch/path/to/file.txt
+        // 找到 refs/heads/ 后第一个 / 的位置来分割 branch 和 path
+        const refsPrefix = 'refs/heads/';
+        const afterRefs = rest.substring(refsPrefix.length);
+        const slashIndex = afterRefs.indexOf('/');
+        if (slashIndex === -1) return null;
+        branch = refsPrefix + afterRefs.substring(0, slashIndex);
+        filePath = afterRefs.substring(slashIndex + 1);
       } else {
         // 格式: main/path/to/file.txt
         const slashIndex = rest.indexOf('/');
@@ -150,12 +154,24 @@ export class LinkValidator {
         ...this.proxyAgents,
       });
 
-      // HTTP 429 速率限制
+      // HTTP 429 速率限制 - 重试一次
       if (response.status === 429) {
         const retryAfter = response.headers['retry-after'];
         const waitTime = retryAfter ? parseInt(retryAfter, 10) * 1000 : 5000;
         await new Promise(resolve => setTimeout(resolve, Math.min(waitTime, 30000)));
-        return { link, isValid: false, isExpired: false, error: 'HTTP 429 (已重试)' };
+        const retryResp = await axios.get(link.url, {
+          timeout: this.timeout,
+          validateStatus: () => true,
+          headers,
+          maxRedirects: 5,
+          ...this.proxyAgents,
+        });
+        if (retryResp.status >= 200 && retryResp.status < 400) {
+          const content = typeof retryResp.data === 'string' ? retryResp.data : '';
+          const isValid = this.isContentValid(content);
+          return { link, isValid, isExpired: false, error: isValid ? undefined : '内容无效' };
+        }
+        return { link, isValid: false, isExpired: false, error: `HTTP ${retryResp.status}` };
       }
 
       // 非 2xx 响应

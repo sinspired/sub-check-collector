@@ -88,9 +88,9 @@ export class SubscriptionCollector {
               console.log(`   📂 发现 ${subFiles.length} 个订阅文件`);
 
               let filteredFiles = subFiles;
-              if (this.config.maxDaysSinceUpdate) {
+              if (this.config.maxDaysSinceSubUpdate) {
                 const cutoffDate = new Date();
-                cutoffDate.setDate(cutoffDate.getDate() - this.config.maxDaysSinceUpdate);
+                cutoffDate.setDate(cutoffDate.getDate() - this.config.maxDaysSinceSubUpdate);
                 filteredFiles = subFiles.filter(f => f.lastCommit >= cutoffDate);
                 if (filteredFiles.length < subFiles.length) {
                   console.log(`   📅 过滤旧文件: ${subFiles.length} → ${filteredFiles.length}`);

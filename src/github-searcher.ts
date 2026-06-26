@@ -199,14 +199,42 @@ export class GitHubSearcher {
 
     const perGroup = Math.ceil(maxRepositories / keywordGroups.length);
 
+    // 验证 GitHub Token 有效性
+    let keywordRepos: Repository[] = [];
+    let tokenValid = true;
+    try {
+      const testResp = await this.octokit.rest.search.repos({
+        q: 'test',
+        per_page: 1,
+      });
+      if (testResp.status !== 200) tokenValid = false;
+    } catch {
+      tokenValid = false;
+    }
+
+    if (!tokenValid) {
+      console.log('\n⚠️  GitHub Token 无效或过期，跳过关键词搜索（仅使用 Code Search 和 Topics）');
+      console.log('   请检查 .env 中的 GITHUB_TOKEN 配置\n');
+    }
+
     console.log('\n📡 启动多策略搜索...\n');
 
-    const [keywordRepos, codeSearchRepos, topicsRepos, seedRepos] = await Promise.all([
-      this.searchByKeywords(keywordGroups, perGroup),
+    const [codeResult, topicResult] = await Promise.allSettled([
       this.searchByCodeSearch(maxRepositories),
       this.searchByTopics(maxRepositories),
-      Promise.resolve(this.getAggregatorRepos()),
     ]);
+
+    if (tokenValid) {
+      try {
+        keywordRepos = await this.searchByKeywords(keywordGroups, perGroup);
+      } catch (e: any) {
+        console.error('关键词搜索失败:', e?.message || e);
+      }
+    }
+
+    const codeSearchRepos = codeResult.status === 'fulfilled' ? codeResult.value : [];
+    const topicsRepos = topicResult.status === 'fulfilled' ? topicResult.value : [];
+    const seedRepos = this.getAggregatorRepos();
 
     addUnique(keywordRepos);
     addUnique(codeSearchRepos);
@@ -294,6 +322,33 @@ export class GitHubSearcher {
       /adblock.*list/i,
       /filter.*list/i,
       /block.*list/i,
+      // 编程语言/框架项目
+      /\bphp\b/i,
+      /\bpython\b/i,
+      /\bnode\b.*module/i,
+      /\bjava\b.*spring/i,
+      /\bruby\b/i,
+      /\bgolang\b/i,
+      /solidity/i,
+      /ethereum/i,
+      /evm\b/i,
+      /smart.?contract/i,
+      // 商业/支付项目
+      /stripe/i,
+      /payment/i,
+      /ecommerce/i,
+      /shopify/i,
+      // 个人配置/dotfiles
+      /dotfiles/i,
+      /dots$/i,
+      /myconfig/i,
+      // 教程/文档
+      /tutorial/i,
+      /course/i,
+      /learning/i,
+      // VPN 客户端源码（不是节点）
+      /vpn.?client/i,
+      /wireguard.?client/i,
     ];
     return excludePatterns.some(p => p.test(text));
   }

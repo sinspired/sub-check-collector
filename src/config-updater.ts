@@ -158,8 +158,8 @@ export class ConfigUpdater {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // 检测 sub-urls: 这一行
-      if (line.trim() === 'sub-urls:') {
+      // 检测 sub-urls: 这一行 (排除注释行)
+      if (line.trim() === 'sub-urls:' && !line.trim().startsWith('#')) {
         inSubUrls = true;
         subUrlsStartIndex = newLines.length;
         newLines.push(line);

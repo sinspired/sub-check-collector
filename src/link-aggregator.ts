@@ -32,8 +32,11 @@ export class LinkAggregator {
     // 去除常见扩展名
     return normalized
       .replace(/\.(txt|yaml|yml|json|conf|v2ray|clash|ss|ssr|base64)$/i, '')
-      .replace(/\/raw\/refs\/heads\/main\//, '/main/')
-      .replace(/\/raw\/main\//, '/main/');
+      // 统一 raw.githubusercontent.com 路径格式
+      .replace(/\/raw\/refs\/heads\/[^/]+\//, '/raw/')
+      .replace(/\/raw\/main\//, '/raw/')
+      // 统一 github.com/raw 路径格式
+      .replace(/\/github\.com\/[^/]+\/[^/]+\/raw\/refs\/heads\/[^/]+\//, '/raw/');
   }
 
   addLinks(newLinks: SubscriptionLink[]): void {
@@ -204,15 +207,20 @@ export class LinkAggregator {
       const dir = path.dirname(filePath);
       const baseName = path.basename(filePath);
       const files = await fs.readdir(dir);
-      const backups = files
-        .filter(f => f.startsWith(`${baseName}.backup.`))
-        .sort()
-        .reverse();
+      const backupEntries = await Promise.all(
+        files
+          .filter(f => f.startsWith(`${baseName}.backup.`))
+          .map(async f => {
+            const stat = await fs.stat(path.join(dir, f));
+            return { name: f, mtime: stat.mtimeMs };
+          })
+      );
+      backupEntries.sort((a, b) => b.mtime - a.mtime);
 
-      if (backups.length > 3) {
-        for (const old of backups.slice(3)) {
-          await fs.unlink(path.join(dir, old));
-          console.log(`🗑️  已清理旧备份: ${old}`);
+      if (backupEntries.length > 3) {
+        for (const old of backupEntries.slice(3)) {
+          await fs.unlink(path.join(dir, old.name));
+          console.log(`🗑️  已清理旧备份: ${old.name}`);
         }
       }
     } catch {
