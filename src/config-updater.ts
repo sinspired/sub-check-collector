@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { SubscriptionLink } from './types';
 
@@ -8,9 +9,6 @@ import { SubscriptionLink } from './types';
  */
 export class ConfigUpdater {
   private configPath: string;
-
-  // 默认 URL，始终放在第一行，永不覆盖
-  private readonly DEFAULT_URL = 'https://misub.907737.xyz/allnodes';
 
   constructor(configPath: string = './config.yaml') {
     this.configPath = configPath;
@@ -37,8 +35,17 @@ export class ConfigUpdater {
       // 3. 提取所有有效的订阅链接 URL
       const newUrls = this.extractValidUrls(links);
 
-      // 4. 获取现有的 sub-urls
+      // 4. 获取现有的 sub-urls 并清理非法 URL
       const existingUrls = new Set<string>(config['sub-urls'] || []);
+      const beforeCount = existingUrls.size;
+      for (const url of existingUrls) {
+        if (this.isNonSubscriptionUrl(url)) {
+          existingUrls.delete(url);
+        }
+      }
+      if (existingUrls.size < beforeCount) {
+        console.log(`   🗑️  清理了 ${beforeCount - existingUrls.size} 个非法 URL`);
+      }
 
       // 5. 合并链接(去重)
       const mergedUrls = this.mergeUrls(existingUrls, newUrls);
@@ -68,11 +75,14 @@ export class ConfigUpdater {
     for (const link of links) {
       const url = link.url;
 
+      // 排除非订阅 URL
+      if (this.isNonSubscriptionUrl(url)) continue;
+
       // 过滤规则: 只保留以下类型的链接
       if (
         url.includes('raw.githubusercontent.com') ||
         url.includes('gist.githubusercontent.com') ||
-        url.includes('github.com') ||
+        (url.includes('github.com') && !url.includes('actions')) ||
         url.match(/\.(txt|yaml|yml|conf|json)$/i) ||
         url.includes('/sub') ||
         url.includes('subscription')
@@ -85,24 +95,36 @@ export class ConfigUpdater {
   }
 
   /**
+   * 判断是否为非订阅 URL
+   */
+  private isNonSubscriptionUrl(url: string): boolean {
+    const lower = url.toLowerCase();
+    return [
+      /qrserver/i,
+      /quickchart/i,
+      /badge/i,
+      /shields\.io/i,
+      /img\.shields/i,
+      /translate\.yandex/i,
+      /actions\/workflows/i,
+      /blacklist/i,
+      /whitelist/i,
+      /\.svg$/i,
+      /\.png$/i,
+      /\.jpg$/i,
+      /\.gif$/i,
+    ].some(p => p.test(lower));
+  }
+
+  /**
    * 合并新旧链接
-   * 默认 URL 会被排除在合并逻辑外，由 writeConfigWithComments 单独处理
    */
   private mergeUrls(existingUrls: Set<string>, newUrls: Set<string>): Set<string> {
-    const merged = new Set<string>();
+    const merged = new Set<string>(existingUrls);
 
-    // 添加现有链接（排除默认 URL，它会单独处理）
-    for (const url of existingUrls) {
-      if (url !== this.DEFAULT_URL) {
-        merged.add(url);
-      }
-    }
-
-    // 添加新链接（排除默认 URL）
+    // 添加新链接
     for (const url of newUrls) {
-      if (url !== this.DEFAULT_URL) {
-        merged.add(url);
-      }
+      merged.add(url);
     }
 
     return merged;
@@ -117,14 +139,9 @@ export class ConfigUpdater {
     newUrls: Set<string>
   ): Promise<void> {
     // 构建新的 sub-urls 部分
-    // 1. 默认 URL 始终放在第一行
-    // 2. 其他 URL 排序后追加
-    // 3. URL 不带引号
-    // 4. sub-urls: 后需要一个空行，然后是 URL 列表
-    const sortedUrls = Array.from(newUrls).sort();
-    const allUrls = [this.DEFAULT_URL, ...sortedUrls];
-    const urlsLines = '\n' + allUrls
-      .map((url) => `  - ${url}`)
+    const urlsLines = Array.from(newUrls)
+      .sort() // 排序
+      .map((url) => `  - "${url}"`)
       .join('\n');
 
     // 改进的正则表达式:
@@ -136,13 +153,15 @@ export class ConfigUpdater {
     const lines = originalContent.split('\n');
     const newLines: string[] = [];
     let inSubUrls = false;
+    let subUrlsStartIndex = -1;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // 检测 sub-urls: 这一行
-      if (line.trim() === 'sub-urls:') {
+      // 检测 sub-urls: 这一行 (排除注释行)
+      if (line.trim() === 'sub-urls:' && !line.trim().startsWith('#')) {
         inSubUrls = true;
+        subUrlsStartIndex = newLines.length;
         newLines.push(line);
         continue;
       }
@@ -186,6 +205,31 @@ export class ConfigUpdater {
     const backupPath = `${this.configPath}.backup.${Date.now()}`;
     await fs.copyFile(this.configPath, backupPath);
     console.log(`💾 配置文件已备份: ${backupPath}`);
+    await this.cleanupOldBackups();
     return backupPath;
+  }
+
+  /**
+   * 清理旧的备份文件，只保留最近 3 个
+   */
+  private async cleanupOldBackups(): Promise<void> {
+    try {
+      const dir = path.dirname(this.configPath);
+      const baseName = path.basename(this.configPath);
+      const files = await fs.readdir(dir);
+      const backups = files
+        .filter(f => f.startsWith(`${baseName}.backup.`))
+        .sort()
+        .reverse();
+
+      if (backups.length > 3) {
+        for (const old of backups.slice(3)) {
+          await fs.unlink(path.join(dir, old));
+          console.log(`🗑️  已清理旧备份: ${old}`);
+        }
+      }
+    } catch {
+      // 忽略清理错误
+    }
   }
 }

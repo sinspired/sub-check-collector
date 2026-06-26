@@ -21,6 +21,9 @@ logs/
 *.log
 npm-debug.log*
 
+# 本地工具目录
+.mimocode/
+
 # 操作系统
 .DS_Store
 Thumbs.db

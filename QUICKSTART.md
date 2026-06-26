@@ -44,31 +44,44 @@ npm start
 
 ```
 🚀 开始收集订阅链接...
-🔍 搜索关键字: free v2ray
-✅ 找到 30 个仓库
-📦 准备处理 30 个仓库
 
-[1/30] 处理: hello-world-1989/cn-news
-📝 从 hello-world-1989/cn-news 提取到 3 个链接
+📡 启动多策略搜索...
 
+🔍 [Code Search] 搜索: vmess://
+🔍 [Topics] 搜索: topic:v2ray
+🔍 [关键词] 搜索: free v2ray subscription
+...
+
+📊 搜索汇总: 关键词 40 + Code Search 231 + Topics 35 + 种子源 0 = 297 个不重复仓库
+
+   🔍 验证 250 个候选仓库的实际提交时间（共 287 个）...
+   📅 实际提交时间过滤: 250 → 63 (过滤了 187 个)
+🎯 最终选择 50 个仓库
+
+📦 准备处理 50 个仓库（按更新时间排序）
+
+[1/50] 处理: hproxy-com/free-proxy-list
+📝 从 hproxy-com/free-proxy-list 提取到 4 个链接
 ...
 
 💾 已保存到: ./output/subscriptions.md
-💾 配置文件已备份: ./config.yaml.backup.1762489296777
+💾 配置文件已备份: ./config.yaml.backup.xxx
 
 📝 开始更新 config.yaml...
 ✅ 配置文件已更新
-   - 原有链接: 22 个
-   - 新增链接: 234 个
-   - 总计链接: 256 个
+   - 原有链接: 1176 个
+   - 新增链接: 443 个
+   - 总计链接: 1619 个
 
 ✨ 收集完成!
 📊 统计信息:
-   - 总链接数: 238
-   - V2Ray: 163
-   - Clash: 29
-   - Shadowsocks: 6
-   - 耗时: 40.83s
+   - 总链接数: 1122
+   - V2Ray: 387
+   - Shadowsocks: 47
+   - Clash: 57
+   - Hysteria: 5
+   - 订阅链接: 133
+   - 耗时: ~200s
 ```
 
 ## 常见问题
