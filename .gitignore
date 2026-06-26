@@ -23,7 +23,6 @@ npm-debug.log*
 
 # 本地工具目录
 .mimocode/
-.spec-workflow/
 
 # 操作系统
 .DS_Store
